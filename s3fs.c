@@ -10,6 +10,8 @@
 #include <fcntl.h>
 #include <fuse.h>
 #include <libgen.h>
+#include <pwd.h>
+#include <time.h>
 #include <limits.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -19,6 +21,8 @@
 #include <sys/xattr.h>
 
 #define GET_PRIVATE_DATA ((s3context_t *) fuse_get_context()->private_data)
+
+int fs_mkdir(const char *, mode_t);
 
 /*
  * For each function below, if you need to return an error,
@@ -40,8 +44,39 @@
  */
 void *fs_init(struct fuse_conn_info *conn)
 {
-    fprintf(stderr, "fs_init --- initializing file system.\n");
-    s3context_t *ctx = GET_PRIVATE_DATA;
+	fprintf(stderr, "fs_init --- initializing file system.\n");
+	s3context_t *ctx = GET_PRIVATE_DATA;
+	if (s3fs_test_bucket(ctx->s3bucket) < 0) 
+	{
+		printf("Failed to connect to bucket (s3fs_test_bucket)\n");
+	} 
+	else 
+	{
+		printf("Successfully connected to bucket (s3fs_test_bucket)\n");
+	}
+	if (s3fs_clear_bucket(ctx->s3bucket) < 0) 
+	{
+		printf("Failed to clear bucket (s3fs_clear_bucket)\n");
+	} 
+	else 
+	{
+		printf("Successfully cleared the bucket (removed all objects)\n");
+	}
+	s3dirent_t * newent = (s3dirent_t *) malloc(sizeof(s3dirent_t));
+	strcpy((newent->name),"."); 
+	newent->type = 'D';
+	newent->size = 0;
+	newent->permissions = (S_IFDIR | S_IRUSR | S_IWUSR | S_IXUSR);
+	newent->hardlinks = 1;
+	newent->user = getuid();
+	newent->group = getgid(); 
+	time_t now = time(NULL);
+        ctime(&now);
+	newent->modify = now;
+	newent->access = now;	
+        return s3fs_put_object(ctx->s3bucket, "/", (uint8_t*)newent, sizeof(s3dirent_t)); 
+    //if clear fails or not ERROR HANDLING!
+  //  int adderror = fs_mkdir("/", (S_IFDIR | S_IRUSR | S_IWUSR | S_IXUSR));
     return ctx;
 }
 
@@ -55,6 +90,18 @@ void fs_destroy(void *userdata) {
 }
 
 
+void fillstat(s3dirent_t dirent, struct stat *statbuf)
+{
+	statbuf->st_mode = dirent.permissions;
+	statbuf->st_nlink = dirent.hardlinks;
+	statbuf->st_uid = dirent.user;
+	statbuf->st_gid = dirent.group;
+	statbuf->st_size = dirent.size;
+	statbuf->st_atime = dirent.access;
+	statbuf->st_mtime = dirent.modify;
+}
+
+
 /* 
  * Get file attributes.  Similar to the stat() call
  * (and uses the same structure).  The st_dev, st_blksize,
@@ -64,7 +111,52 @@ void fs_destroy(void *userdata) {
 
 int fs_getattr(const char *path, struct stat *statbuf) {
     fprintf(stderr, "fs_getattr(path=\"%s\")\n", path);
-    s3context_t *ctx = GET_PRIVATE_DATA;
+    /*s3context_t *ctx = GET_PRIVATE_DATA;
+    uint8_t * buffer;
+    struct fuse_file_info *fi;
+    if (!fs_opendir(path,  fi))//is a directory
+    {
+    	if(s3fs_get_object(ctx->s3bucket, path, &buffer, 0,0)==-1)
+   	{
+		return-ENOENT;
+   	}
+	else
+	{
+		s3dirent_t * dirents = (s3dirent_t*)buffer;
+		fillstat(dirents[0], statbuf);
+		return 0;
+	}
+    }
+    else //is a file
+    {
+	char * pat = strdup(path);
+	char * dir = dirname(pat);
+	if(s3fs_get_object(ctx->s3bucket, path, &buffer, 0,0)==-1)
+	{
+	return-ENOENT;
+	}
+	if(s3fs_get_object(ctx->s3bucket, dir, &buffer, 0,0)==-1)
+	{
+	return-ENOENT;
+	}
+	else
+	{
+		
+		s3dirent_t * dirents = (s3dirent_t*)buffer;
+		int length = sizeof(buffer)/sizeof(s3dirent_t);
+		int x = 0;
+		for(; x < length; x++)
+		{
+			s3dirent_t dirent = dirents[x];
+			if(strcmp((dirent.name),path) == 0)
+			{
+				fillstat(dirents[x],statbuf);
+				return 0;
+			}
+		}
+	}
+    }
+ */
     return -EIO;
 }
 
@@ -77,7 +169,49 @@ int fs_getattr(const char *path, struct stat *statbuf) {
  */
 int fs_opendir(const char *path, struct fuse_file_info *fi) {
     fprintf(stderr, "fs_opendir(path=\"%s\")\n", path);
+  /*  if (strcasecmp(path, "/")) //root entered on initialization
+    {
+	return 0;
+    }
+  
     s3context_t *ctx = GET_PRIVATE_DATA;
+    char * pat = strdup(path);
+    char * dir = dirname(pat);
+    uint8_t * buffer;
+    char * bucket = "edu.colgate.cosc301.jlannin";
+    if(s3fs_get_object(bucket, path, &buffer, 0,0)==-1)
+    {
+	return-ENOENT;
+    }
+    int success = s3fs_get_object(bucket, dir, &buffer, 0, 0);
+    if(success == -1)
+    {
+       return -ENOENT;
+    }
+    else
+    {
+	int x = 0;
+	int length = sizeof(buffer)/sizeof(s3dirent_t);
+	s3dirent_t * dirents = (s3dirent_t*)buffer;
+	for(; x < length; x++)
+	{
+		s3dirent_t dirent = dirents[x];
+		if(strcmp((dirent.name),path) == 0)
+		{
+			if(dirent.type == 'D')
+			{
+				return 0;
+			}
+			else
+			{
+				return -ENOTDIR;
+			}
+		}
+	}
+
+	return -ENOENT;
+    }
+    */
     return -EIO;
 }
 
@@ -102,9 +236,55 @@ int fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset
 int fs_releasedir(const char *path, struct fuse_file_info *fi) {
     fprintf(stderr, "fs_releasedir(path=\"%s\")\n", path);
     s3context_t *ctx = GET_PRIVATE_DATA;
-    return -EIO;
+    return 0;
 }
 
+
+int adddirent(const char *path, mode_t mode, char * bucket)
+{
+	s3dirent_t * newent = (s3dirent_t *) malloc(sizeof(s3dirent_t));
+	strcpy((newent->name),"."); 
+	newent->type = 'D';
+	newent->size = 0;
+	newent->permissions = mode;
+	newent->hardlinks = 1;
+	newent->user = getuid();
+	newent->group = getgid(); 
+	time_t now = time(NULL);
+        ctime(&now);
+	newent->modify = now;
+	newent->access = now;	
+        return s3fs_put_object(bucket, path, (uint8_t*)newent, sizeof(s3dirent_t)); 
+}
+
+int adddirtoparent(const char * path, char * bucket)
+{
+	char * pat = strdup(path);
+	char * par = dirname(pat);
+	uint8_t * buffer;
+	int success = s3fs_get_object(bucket, par, &buffer, 0, 0);
+	if(success ==-1)
+	{
+		return -1;
+	}
+	int length = sizeof(buffer)/sizeof(s3dirent_t);
+	s3dirent_t * new = (s3dirent_t *) malloc(sizeof(s3dirent_t)*(length+1));
+	int x = 0;
+	s3dirent_t * dirents = (s3dirent_t*)buffer;
+	dirents[0].hardlinks++;
+	for (;x<length;x++)
+	{
+		new[x] = dirents[x];
+	}
+	s3dirent_t adding;
+	adding.type = 'D';
+	strcpy(adding.name, path);
+	new[x] = adding;
+	free(dirents);
+	free(pat);
+	return 0;
+	
+}
 
 /* 
  * Create a new directory.
@@ -114,13 +294,47 @@ int fs_releasedir(const char *path, struct fuse_file_info *fi) {
  * correct directory type bits (for setting in the metadata)
  * use mode|S_IFDIR.
  */
+
 int fs_mkdir(const char *path, mode_t mode) {
     fprintf(stderr, "fs_mkdir(path=\"%s\", mode=0%3o)\n", path, mode);
     s3context_t *ctx = GET_PRIVATE_DATA;
+   /* char * bucket = (ctx->s3bucket);
+    struct fuse_file_info * fi;
     mode |= S_IFDIR;
+    if(!fs_opendir(path, fi))
+    {
+        return -EEXIST;
+    }
+    else
+    {
+	if (strcasecmp(path, "/") == 0)
+	{
+		if (adddirent(path,mode, bucket) != -1)
+		{
+			return 0;
+		}
+		else
+		{
+			return -EIO;
+		}
+	}	
+	else
+	{
+		char * pat = strdup(path);
+		char * par = dirname(pat);
+		//fs_mkdir(par, mode);
+		adddirtoparent(path, bucket);
+		return adddirent(path, mode, bucket);
+	}
+
+	
+    }
+*/
 
     return -EIO;
 }
+
+
 
 
 /*
@@ -323,6 +537,7 @@ struct fuse_operations s3fs_ops = {
  * here (but you could also reasonably do that in fs_init).
  */
 int main(int argc, char *argv[]) {
+	fflush(stdout);
     // don't allow anything to continue if we're running as root.  bad stuff.
     if ((getuid() == 0) || (geteuid() == 0)) {
     	fprintf(stderr, "Don't run this as root.\n");

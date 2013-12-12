@@ -4,6 +4,8 @@
 #include <sys/stat.h>
 #include <stdint.h>   // for uint32_t, etc.
 #include <sys/time.h> // for struct timeval
+#include <sys/types.h>
+#include <unistd.h>
 
 /* This code is based on the fine code written by Joseph Pfeiffer for his
    fuse system tutorial. */
@@ -27,7 +29,17 @@ typedef struct {
  * type) should go here.
  */
 
+typedef struct s3dirent_t{
 
-
+	char type;
+	char name [256];
+	off_t size;
+	nlink_t hardlinks;
+	mode_t permissions;
+	uid_t user;
+	gid_t group;
+	time_t access;
+	time_t modify;
+} s3dirent_t;
 
 #endif // __USERSPACEFS_H__
