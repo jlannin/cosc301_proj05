@@ -46,26 +46,26 @@ void *fs_init(struct fuse_conn_info *conn)
 {
 	fprintf(stderr, "fs_init --- initializing file system.\n");
 	s3context_t *ctx = GET_PRIVATE_DATA;
-	if (s3fs_test_bucket(ctx->s3bucket) < 0) 
+	if (s3fs_test_bucket(ctx->s3bucket) < 0)
 	{
 		printf("Failed to connect to bucket (s3fs_test_bucket)\n");
-	} 
-	else 
+	}
+	else
 	{
 		printf("Successfully connected to bucket (s3fs_test_bucket)\n");
 	}
-	if (s3fs_clear_bucket(ctx->s3bucket) < 0) 
+	if (s3fs_clear_bucket(ctx->s3bucket) < 0)
 	{
 		printf("Failed to clear bucket (s3fs_clear_bucket)\n");
-	} 
-	else 
+	}
+	else
 	{
 		printf("Successfully cleared the bucket (removed all objects)\n");
 	}
 	s3dirent_t * newent = (s3dirent_t *) malloc(sizeof(s3dirent_t));
-	strcpy((newent->name),"."); 
+	strcpy((newent->name),".");
 	newent->type = 'D';
-	newent->size = 0;
+	newent->size = 100;
 	newent->permissions = (S_IFDIR | S_IRUSR | S_IWUSR | S_IXUSR);
 	newent->hardlinks = 1;
 	newent->user = getuid();
@@ -74,10 +74,18 @@ void *fs_init(struct fuse_conn_info *conn)
         ctime(&now);
 	newent->modify = now;
 	newent->access = now;	
-        return s3fs_put_object(ctx->s3bucket, "/", (uint8_t*)newent, sizeof(s3dirent_t)); 
-    //if clear fails or not ERROR HANDLING!
-  //  int adderror = fs_mkdir("/", (S_IFDIR | S_IRUSR | S_IWUSR | S_IXUSR));
-    return ctx;
+        ssize_t test = s3fs_put_object(ctx->s3bucket, "/", (uint8_t*)newent, sizeof(s3dirent_t)); 
+	if(test < 0){
+		fprintf(stderr, "initialization failed.\n");
+		return -EIO;
+	}
+	else if(test < sizeof(s3dirent_t)){
+		fprintf(stderr, "did not allocate full dirent.\n");
+		return -EIO;
+	}
+	return 0;
+	//if clear fails or not ERROR HANDLING!
+	//  int adderror = fs_mkdir("/", (S_IFDIR | S_IRUSR | S_IWUSR | S_IXUSR));
 }
 
 /*
@@ -92,6 +100,7 @@ void fs_destroy(void *userdata) {
 
 void fillstat(s3dirent_t dirent, struct stat *statbuf)
 {
+
 	statbuf->st_mode = dirent.permissions;
 	statbuf->st_nlink = dirent.hardlinks;
 	statbuf->st_uid = dirent.user;
@@ -111,19 +120,23 @@ void fillstat(s3dirent_t dirent, struct stat *statbuf)
 
 int fs_getattr(const char *path, struct stat *statbuf) {
     fprintf(stderr, "fs_getattr(path=\"%s\")\n", path);
-    /*s3context_t *ctx = GET_PRIVATE_DATA;
-    uint8_t * buffer;
+    s3context_t *ctx = GET_PRIVATE_DATA;
+    s3dirent_t * buffer = NULL;
     struct fuse_file_info *fi;
+	//char * bucket = ctx->s3bucket;
+	char *bucket = "edu.colgate.cosc301.jlannin";
+	printf("%s\n", "testattr");
     if (!fs_opendir(path,  fi))//is a directory
     {
-    	if(s3fs_get_object(ctx->s3bucket, path, &buffer, 0,0)==-1)
+    	if(s3fs_get_object(bucket, path, (uint8_t**)&buffer, 0,0)==-1)
    	{
+		free(buffer);
 		return-ENOENT;
    	}
 	else
 	{
-		s3dirent_t * dirents = (s3dirent_t*)buffer;
-		fillstat(dirents[0], statbuf);
+		fillstat(buffer[0], statbuf);
+		free(buffer);
 		return 0;
 	}
     }
@@ -131,33 +144,32 @@ int fs_getattr(const char *path, struct stat *statbuf) {
     {
 	char * pat = strdup(path);
 	char * dir = dirname(pat);
-	if(s3fs_get_object(ctx->s3bucket, path, &buffer, 0,0)==-1)
+	if(s3fs_get_object(bucket, path, (uint8_t**)&buffer, 0,0)==-1)
 	{
-	return-ENOENT;
+		free(buffer);
+		return-ENOENT;
 	}
-	if(s3fs_get_object(ctx->s3bucket, dir, &buffer, 0,0)==-1)
+	if(s3fs_get_object(bucket, dir, (uint8_t**)&buffer, 0,0)==-1)
 	{
-	return-ENOENT;
+		free(buffer);
+		return-ENOENT;
 	}
 	else
 	{
-		
-		s3dirent_t * dirents = (s3dirent_t*)buffer;
 		int length = sizeof(buffer)/sizeof(s3dirent_t);
 		int x = 0;
 		for(; x < length; x++)
 		{
-			s3dirent_t dirent = dirents[x];
+			s3dirent_t dirent = buffer[x];
 			if(strcmp((dirent.name),path) == 0)
 			{
-				fillstat(dirents[x],statbuf);
+				fillstat(buffer[x],statbuf);
+				free(buffer);
 				return 0;
 			}
 		}
 	}
     }
- */
-    return -EIO;
 }
 
 
@@ -169,50 +181,51 @@ int fs_getattr(const char *path, struct stat *statbuf) {
  */
 int fs_opendir(const char *path, struct fuse_file_info *fi) {
     fprintf(stderr, "fs_opendir(path=\"%s\")\n", path);
-  /*  if (strcasecmp(path, "/")) //root entered on initialization
+    if (!strcasecmp(path, "/")) //root entered on initialization
     {
 	return 0;
     }
-  
+	printf("%s\n", "test1");
     s3context_t *ctx = GET_PRIVATE_DATA;
     char * pat = strdup(path);
     char * dir = dirname(pat);
-    uint8_t * buffer;
-    char * bucket = "edu.colgate.cosc301.jlannin";
-    if(s3fs_get_object(bucket, path, &buffer, 0,0)==-1)
+    s3dirent_t *buffer = NULL;
+	char * bucket = "edu.colgate.cosc301.jlannin";
+    if(s3fs_get_object(bucket, path, (uint8_t**)&buffer, 0, 0) == -1)
     {
-	return-ENOENT;
+	free(buffer);
+	return -ENOENT;
     }
-    int success = s3fs_get_object(bucket, dir, &buffer, 0, 0);
+	//printf("%s\n", "test2");
+    int success = s3fs_get_object(bucket, dir, (uint8_t**)&buffer, 0, 0);
     if(success == -1)
     {
-       return -ENOENT;
+	free(buffer);
+	return -ENOENT;
     }
-    else
-    {
+	printf("%s\n", "test2.5");
 	int x = 0;
 	int length = sizeof(buffer)/sizeof(s3dirent_t);
-	s3dirent_t * dirents = (s3dirent_t*)buffer;
 	for(; x < length; x++)
 	{
-		s3dirent_t dirent = dirents[x];
+		printf("%s%d\n", "test3", x);
+		s3dirent_t dirent = buffer[x];
 		if(strcmp((dirent.name),path) == 0)
 		{
 			if(dirent.type == 'D')
 			{
+				free(buffer);
 				return 0;
 			}
 			else
 			{
+				free(buffer);
 				return -ENOTDIR;
 			}
 		}
 	}
-
+	free(buffer);
 	return -ENOENT;
-    }
-    */
-    return -EIO;
 }
 
 
@@ -226,7 +239,25 @@ int fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset
     fprintf(stderr, "fs_readdir(path=\"%s\", buf=%p, offset=%d)\n",
           path, buf, (int)offset);
     s3context_t *ctx = GET_PRIVATE_DATA;
-    return -EIO;
+	int test = fs_opendir(path, fi);
+	if(test){
+		return test;
+	}
+	char *bucket = "edu.colgate.cosc301.jlannin";
+	s3dirent_t * buffer = NULL;
+	int success = s3fs_get_object(bucket, path, (uint8_t**)&buffer, 0, 0);
+	int length = sizeof(buffer)/sizeof(s3dirent_t);
+        int x = 0;
+	for(; x < length; x++)
+        {
+                s3dirent_t dirent = buffer[x];
+                if(filler(buf, dirent.name, NULL, 0)!=0)
+                {
+                	return -ENOMEM;
+                }
+        }
+	free(buffer);
+    return 0;
 }
 
 
@@ -254,39 +285,51 @@ int adddirent(const char *path, mode_t mode, char * bucket)
         ctime(&now);
 	newent->modify = now;
 	newent->access = now;	
-        return s3fs_put_object(bucket, path, (uint8_t*)newent, sizeof(s3dirent_t)); 
+        int test = s3fs_put_object(bucket, path, (uint8_t*)newent, sizeof(s3dirent_t)); 
+	if(test < 0){
+                fprintf(stderr, "initialization failed.\n");
+                return -EIO;
+        }
+        else if(test < sizeof(s3dirent_t)){
+                fprintf(stderr, "did not allocate full dirent.\n");
+                return -EIO;
+        }
+        return 0;
 }
 
 int adddirtoparent(const char * path, char * bucket)
 {
 	char * pat = strdup(path);
 	char * par = dirname(pat);
-	uint8_t * buffer;
-	int success = s3fs_get_object(bucket, par, &buffer, 0, 0);
+	s3dirent_t * buffer = NULL;
+	int success = s3fs_get_object(bucket, par, (uint8_t**)&buffer, 0, 0);
 	if(success ==-1)
 	{
 		return -1;
 	}
 	int length = sizeof(buffer)/sizeof(s3dirent_t);
-	s3dirent_t * new = (s3dirent_t *) malloc(sizeof(s3dirent_t)*(length+1));
+	s3dirent_t * newents = (s3dirent_t *) malloc(sizeof(s3dirent_t)*(length+1));
 	int x = 0;
-	s3dirent_t * dirents = (s3dirent_t*)buffer;
-	dirents[0].hardlinks++;
+	buffer[0].hardlinks++;
 	for (;x<length;x++)
 	{
-		new[x] = dirents[x];
+		newents[x] = buffer[x];
 	}
 	s3dirent_t adding;
 	adding.type = 'D';
 	strcpy(adding.name, path);
-	new[x] = adding;
-	free(dirents);
+	newents[x] = adding;
+	int remove = s3fs_remove_object(bucket, par);
+	if(remove < 0){
+		return -EIO;
+	}
+	int test = s3fs_put_object(bucket, par, (uint8_t *)newents, (length + 1)*sizeof(s3dirent_t));
+	free(buffer);
 	free(pat);
-	return 0;
-	
+	return test;
 }
 
-/* 
+/*
  * Create a new directory.
  *
  * Note that the mode argument may not have the type specification
@@ -298,8 +341,9 @@ int adddirtoparent(const char * path, char * bucket)
 int fs_mkdir(const char *path, mode_t mode) {
     fprintf(stderr, "fs_mkdir(path=\"%s\", mode=0%3o)\n", path, mode);
     s3context_t *ctx = GET_PRIVATE_DATA;
-   /* char * bucket = (ctx->s3bucket);
-    struct fuse_file_info * fi;
+    //char * bucket = (ctx->s3bucket);
+    char * bucket = "edu.colgate.cosc301.jlannin";
+	struct fuse_file_info * fi;
     mode |= S_IFDIR;
     if(!fs_opendir(path, fi))
     {
@@ -307,31 +351,20 @@ int fs_mkdir(const char *path, mode_t mode) {
     }
     else
     {
-	if (strcasecmp(path, "/") == 0)
-	{
-		if (adddirent(path,mode, bucket) != -1)
-		{
-			return 0;
-		}
-		else
-		{
-			return -EIO;
-		}
-	}	
-	else
-	{
-		char * pat = strdup(path);
-		char * par = dirname(pat);
-		//fs_mkdir(par, mode);
-		adddirtoparent(path, bucket);
-		return adddirent(path, mode, bucket);
-	}
-
-	
+	char * pat = strdup(path);
+	char * par = dirname(pat);
+	fs_mkdir(par, mode);
+	int test = adddirtoparent(path, bucket);
+	if(test < 0){
+                fprintf(stderr, "upload failed.\n");
+                return -EIO;
+        }
+        else if(test < sizeof(s3dirent_t)){
+                fprintf(stderr, "did not allocate full dirent.\n");
+                return -EIO;
+        }
+	return adddirent(path, mode, bucket);
     }
-*/
-
-    return -EIO;
 }
 
 
@@ -343,7 +376,47 @@ int fs_mkdir(const char *path, mode_t mode) {
 int fs_rmdir(const char *path) {
     fprintf(stderr, "fs_rmdir(path=\"%s\")\n", path);
     s3context_t *ctx = GET_PRIVATE_DATA;
-    return -EIO;
+    struct fuse_file_info *fi;
+	if(!fs_opendir(path, fi)){
+		return -EEXIST;
+	}
+	s3dirent_t * buffer = NULL;
+	int test = s3fs_get_object(ctx->s3bucket, path, (uint8_t**)&buffer, 0, 0);
+	if(test == -1){
+		free(buffer);
+		return -ENOENT;
+	}
+	int x = 1;
+	int length = sizeof(buffer)/sizeof(s3dirent_t);
+	for(; x < length; x++){
+		if(buffer[x].type != 'U'){
+			free(buffer);
+			return -ENOTEMPTY;
+		}
+	}
+	if(s3fs_remove_object(ctx->s3bucket, path) == -1){
+		free(buffer);
+		return -EIO;
+	}
+	char *pat = strdup(path);
+	char *par = dirname(pat);
+	free(buffer);
+	buffer = NULL;
+	test = s3fs_get_object(ctx->s3bucket, par, (uint8_t**)&buffer, 0, 0);
+        if(test == -1){
+		free(buffer);
+                return -ENOENT;
+        }
+        x = 1;
+        length = sizeof(buffer)/sizeof(s3dirent_t);
+        for(; x < length; x++){
+                if(!strcmp(buffer[x].name, path)){
+                        buffer[x].type = 'U';
+                	buffer[0].hardlinks--;
+			free(buffer);
+			return 0;
+		}
+        }
 }
 
 
