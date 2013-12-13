@@ -40,6 +40,7 @@ typedef struct s3dirent_t{
 	gid_t group;
 	time_t access;
 	time_t modify;
+	time_t change;
 } s3dirent_t;
 
 #endif // __USERSPACEFS_H__
