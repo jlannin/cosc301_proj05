@@ -76,6 +76,7 @@ void *fs_init(struct fuse_conn_info *conn)
 	newent->access = now;
 	newent->change = now;	
         ssize_t test = s3fs_put_object(ctx->s3bucket, "/", (uint8_t*)newent, sizeof(s3dirent_t));
+	free(newent);
 	if(test < 0){
 		fprintf(stderr, "initialization failed.\n");
 	}
@@ -83,7 +84,6 @@ void *fs_init(struct fuse_conn_info *conn)
 		fprintf(stderr, "did not allocate full dirent.\n");
 	}
 	return (ctx->s3bucket);
-	//  int adderror = fs_mkdir("/", (S_IFDIR | S_IRUSR | S_IWUSR | S_IXUSR));
 }
 
 /*
@@ -178,6 +178,10 @@ int fs_getattr(const char *path, struct stat *statbuf) {
 				return 0;
 			}
 		}
+		free(pat);
+        	free(buffer);
+        	free(dup);
+        	return -EIO;
 	}
     }
 }
@@ -203,19 +207,19 @@ int fs_opendir(const char *path, struct fuse_file_info *fi) {
     if(s3fs_get_object(bucket, path, (uint8_t**)&buffer, 0, 0) == -1)
     {
 	free(buffer);
+	free(pat);
 	printf(stderr, "%s\n\n\n\n\n\n","option3");
 	printf("%s",path);
-
 	return -ENOENT;
     }
 	free(buffer);
 	printf("%s\n", "test2");
     int success = s3fs_get_object(bucket, dir, (uint8_t**)&buffer, 0, 0);
-    if(success == -1)
+    free(pat);
+	if(success == -1)
     {
 	free(buffer);
 	printf("%s\n\n\n\n\n\n","option4");
-
 	return -ENOENT;
     }
 	printf(stderr, "%s\n", "test2.5");
@@ -274,7 +278,8 @@ int fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset
     	        {
 			if(filler(buf, buffer[x].name, NULL, 0)!=0)
         	        {
-	               		return -ENOMEM;
+	               		free(buffer);
+				return -ENOMEM;
                 	}
 		}
         }
@@ -309,9 +314,10 @@ int adddirent(const char *path, mode_t mode, char * bucket)
 	newent->access = now;
 	newent->change = now;
         int test = s3fs_put_object(bucket, path, (uint8_t*)newent, sizeof(s3dirent_t)); 
+	free(newent);
 	if(test < 0){
                 fprintf(stderr, "upload failed.\n");
-                return -EIO;
+		return -EIO;
         }
         else if(test < sizeof(s3dirent_t)){
                 fprintf(stderr, "did not allocate full dirent.\n");
@@ -330,9 +336,9 @@ int adddirtoparent(const char * path, char * bucket)
 	if(success ==-1)
 	{
 		free(buffer);
-        	free(pat);
         	free(dup);
-		return -1;
+		free(pat);
+		return -EIO;
 	}
 	int length = success/sizeof(s3dirent_t);
 	s3dirent_t * newents = (s3dirent_t *) malloc(sizeof(s3dirent_t)*(length+1));
@@ -350,12 +356,13 @@ int adddirtoparent(const char * path, char * bucket)
 	int remove = s3fs_remove_object(bucket, par);
 	if(remove < 0){
 		free(buffer);
-        	free(pat);
         	free(dup);
+		free(pat);
 		return -EIO;
 	}
 	int test = s3fs_put_object(bucket, par, (uint8_t *)newents, (length + 1)*sizeof(s3dirent_t));
 	free(buffer);
+	free(newents);
 	free(pat);
 	free(dup);
 	return test;
@@ -384,8 +391,11 @@ int fs_mkdir(const char *path, mode_t mode) {
     {
 	char * pat = strdup(path);
 	char * par = dirname(pat);
-
-	fs_mkdir(par, mode);
+	if(fs_opendir(par,fi)) //check if parent exists
+	{
+		return -ENOENT;
+	}
+	free(pat);
 	int test = adddirtoparent(path, bucket);
 	if(test < 0){
                 fprintf(stderr, "upload failed.\n");
@@ -403,7 +413,7 @@ int fs_mkdir(const char *path, mode_t mode) {
 
 
 /*
- * Remove a directory. 
+ * Remove a directory.
  */
 int fs_rmdir(const char *path) {
     fprintf(stderr, "fs_rmdir(path=\"%s\")\n", path);
@@ -441,7 +451,7 @@ int fs_rmdir(const char *path) {
 	buffer = NULL;
 	//now to update parent
 	test = s3fs_get_object(bucket, par, (uint8_t**)&buffer, 0, 0);
-        if(test == -1){
+	if(test == -1){
 		free(buffer);
 		fprintf("%s\n\n\n\n\n", "Just kidding");
                 return -ENOENT;
@@ -458,12 +468,14 @@ int fs_rmdir(const char *path) {
 				 if(s3fs_remove_object(bucket, par) == -1){
 	        		        free(buffer);
 					free(dup);
+					free(pat);
                 			return -EIO;
         			}
         			int test2 = s3fs_put_object(bucket, par, (uint8_t *)buffer, (length)*sizeof(s3dirent_t));
   	      			if(test2 < 0){
              		  	  fprintf(stderr, "upload failed.\n");
             			    	free(dup);
+					free(pat);
 					free(buffer);
 					return -EIO;
        				 }
@@ -471,15 +483,18 @@ int fs_rmdir(const char *path) {
                			 fprintf(stderr, "did not allocate full dirent.\n");
       			          	free(dup);
 					free(buffer);
+					free(pat);
 					return -EIO;
         			}
 				free(dup);
 				free(buffer);
+				free(pat);
 				return 0;
 			}
 		}
         }
 	free(dup);
+	free(pat);
 	free(buffer);
 	return -EIO;
 }
