@@ -65,7 +65,7 @@ void *fs_init(struct fuse_conn_info *conn)
 	s3dirent_t * newent = (s3dirent_t *) malloc(sizeof(s3dirent_t));
 	strcpy((newent->name),".");
 	newent->type = 'D';
-	newent->size = 100;
+	newent->size = 0;
 	newent->permissions = (S_IFDIR | S_IRUSR | S_IWUSR | S_IXUSR);
 	newent->hardlinks = 1;
 	newent->user = getuid();
@@ -74,7 +74,7 @@ void *fs_init(struct fuse_conn_info *conn)
         ctime(&now);
 	newent->modify = now;
 	newent->access = now;	
-        ssize_t test = s3fs_put_object(ctx->s3bucket, "/", (uint8_t*)newent, sizeof(s3dirent_t)); 
+        ssize_t test = s3fs_put_object(ctx->s3bucket, "/", (uint8_t*)newent, sizeof(s3dirent_t));
 	if(test < 0){
 		fprintf(stderr, "initialization failed.\n");
 		return -EIO;
@@ -114,7 +114,7 @@ void fillstat(s3dirent_t dirent, struct stat *statbuf)
 /* 
  * Get file attributes.  Similar to the stat() call
  * (and uses the same structure).  The st_dev, st_blksize,
- * and st_ino fields are ignored in the struct (and 
+ * and st_ino fields are ignored in the struct (and
  * do not need to be filled in).
  */
 
@@ -131,7 +131,9 @@ int fs_getattr(const char *path, struct stat *statbuf) {
     	if(s3fs_get_object(bucket, path, (uint8_t**)&buffer, 0,0)==-1)
    	{
 		free(buffer);
-		return-ENOENT;
+	//	printf("%s","option0");
+
+		return -ENOENT;
    	}
 	else
 	{
@@ -147,12 +149,15 @@ int fs_getattr(const char *path, struct stat *statbuf) {
 	if(s3fs_get_object(bucket, path, (uint8_t**)&buffer, 0,0)==-1)
 	{
 		free(buffer);
-		return-ENOENT;
+//printf("%s","option1");
+
+		return -ENOENT;
 	}
 	if(s3fs_get_object(bucket, dir, (uint8_t**)&buffer, 0,0)==-1)
 	{
 		free(buffer);
-		return-ENOENT;
+//		printf("%s","option2");
+		return -ENOENT;
 	}
 	else
 	{
@@ -194,6 +199,9 @@ int fs_opendir(const char *path, struct fuse_file_info *fi) {
     if(s3fs_get_object(bucket, path, (uint8_t**)&buffer, 0, 0) == -1)
     {
 	free(buffer);
+printf("%s","option3");
+printf("%s",path);
+
 	return -ENOENT;
     }
 	//printf("%s\n", "test2");
@@ -201,11 +209,13 @@ int fs_opendir(const char *path, struct fuse_file_info *fi) {
     if(success == -1)
     {
 	free(buffer);
+printf("%s","option4");
+
 	return -ENOENT;
     }
 	printf("%s\n", "test2.5");
 	int x = 0;
-	int length = sizeof(buffer)/sizeof(s3dirent_t);
+	int length = success/sizeof(s3dirent_t);
 	for(; x < length; x++)
 	{
 		printf("%s%d\n", "test3", x);
@@ -225,6 +235,8 @@ int fs_opendir(const char *path, struct fuse_file_info *fi) {
 		}
 	}
 	free(buffer);
+	printf("%s","option6");
+
 	return -ENOENT;
 }
 
@@ -246,7 +258,7 @@ int fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset
 	char *bucket = "edu.colgate.cosc301.jlannin";
 	s3dirent_t * buffer = NULL;
 	int success = s3fs_get_object(bucket, path, (uint8_t**)&buffer, 0, 0);
-	int length = sizeof(buffer)/sizeof(s3dirent_t);
+	int length = success/sizeof(s3dirent_t);
         int x = 0;
 	for(; x < length; x++)
         {
@@ -284,10 +296,10 @@ int adddirent(const char *path, mode_t mode, char * bucket)
 	time_t now = time(NULL);
         ctime(&now);
 	newent->modify = now;
-	newent->access = now;	
+	newent->access = now;
         int test = s3fs_put_object(bucket, path, (uint8_t*)newent, sizeof(s3dirent_t)); 
 	if(test < 0){
-                fprintf(stderr, "initialization failed.\n");
+                fprintf(stderr, "upload failed.\n");
                 return -EIO;
         }
         else if(test < sizeof(s3dirent_t)){
@@ -307,7 +319,7 @@ int adddirtoparent(const char * path, char * bucket)
 	{
 		return -1;
 	}
-	int length = sizeof(buffer)/sizeof(s3dirent_t);
+	int length = success/sizeof(s3dirent_t);
 	s3dirent_t * newents = (s3dirent_t *) malloc(sizeof(s3dirent_t)*(length+1));
 	int x = 0;
 	buffer[0].hardlinks++;
@@ -377,8 +389,8 @@ int fs_rmdir(const char *path) {
     fprintf(stderr, "fs_rmdir(path=\"%s\")\n", path);
     s3context_t *ctx = GET_PRIVATE_DATA;
     struct fuse_file_info *fi;
-	if(!fs_opendir(path, fi)){
-		return -EEXIST;
+	if(fs_opendir(path, fi)){
+		return -ENOENT;
 	}
 	s3dirent_t * buffer = NULL;
 	int test = s3fs_get_object(ctx->s3bucket, path, (uint8_t**)&buffer, 0, 0);
@@ -387,7 +399,7 @@ int fs_rmdir(const char *path) {
 		return -ENOENT;
 	}
 	int x = 1;
-	int length = sizeof(buffer)/sizeof(s3dirent_t);
+	int length = test/sizeof(s3dirent_t);
 	for(; x < length; x++){
 		if(buffer[x].type != 'U'){
 			free(buffer);
@@ -408,7 +420,7 @@ int fs_rmdir(const char *path) {
                 return -ENOENT;
         }
         x = 1;
-        length = sizeof(buffer)/sizeof(s3dirent_t);
+        length = test/sizeof(s3dirent_t);
         for(; x < length; x++){
                 if(!strcmp(buffer[x].name, path)){
                         buffer[x].type = 'U';
