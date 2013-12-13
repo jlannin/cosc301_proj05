@@ -65,7 +65,7 @@ void *fs_init(struct fuse_conn_info *conn)
 	s3dirent_t * newent = (s3dirent_t *) malloc(sizeof(s3dirent_t));
 	strcpy((newent->name),".");
 	newent->type = 'D';
-	newent->size = 0;
+	newent->size = sizeof(s3dirent_t);
 	newent->permissions = (S_IFDIR | S_IRUSR | S_IWUSR | S_IXUSR);
 	newent->hardlinks = 1;
 	newent->user = getuid();
@@ -98,7 +98,7 @@ void fs_destroy(void *userdata) {
 
 void fillstat(s3dirent_t dirent, struct stat *statbuf)
 {
-
+	
 	statbuf->st_mode = dirent.permissions;
 	statbuf->st_nlink = dirent.hardlinks;
 	statbuf->st_uid = dirent.user;
@@ -107,6 +107,8 @@ void fillstat(s3dirent_t dirent, struct stat *statbuf)
 	statbuf->st_atime = dirent.access;
 	statbuf->st_mtime = dirent.modify;
 	statbuf->st_ctime = dirent.change;
+	statbuf->st_blocks = (dirent.size/512) + 1; //????????
+	printf("%s%d\n\n\n", "fillstat size: ", statbuf->st_size);
 }
 
 
@@ -128,13 +130,14 @@ int fs_getattr(const char *path, struct stat *statbuf) {
     	if(s3fs_get_object(bucket, path, (uint8_t**)&buffer, 0,0)==-1)
    	{
 		free(buffer);
-	printf("%s\n\n\n\n\n\n\n\n\n\n\n","option0");
+		printf("%s\n\n\n\n\n\n\n\n\n\n\n","option0");
 
 		return -ENOENT;
    	}
 	else
 	{
 		fillstat(buffer[0], statbuf);
+		printf("%s%d\n\n\n", "statbuf size: ", statbuf->st_size);
 		free(buffer);
 		return 0;
 	}
@@ -147,7 +150,7 @@ int fs_getattr(const char *path, struct stat *statbuf) {
 	{
 		free(buffer);
 		free(pat);
-printf("%s\n\n\n\n\n\n\n\n\n","option1");
+		printf("%s\n\n\n\n\n\n\n\n\n","option1");
 
 		return -ENOENT;
 	}
@@ -162,14 +165,16 @@ printf("%s\n\n\n\n\n\n\n\n\n","option1");
 	{
 		int length = sizeof(buffer)/sizeof(s3dirent_t);
 		int x = 0;
+		char * dup = strdup(path);
 		for(; x < length; x++)
 		{
 			s3dirent_t dirent = buffer[x];
-			if(strcmp((dirent.name), path) == 0)
+			if(strcmp((dirent.name), basename(dup)) == 0)
 			{
 				fillstat(buffer[x],statbuf);
 				free(pat);
 				free(buffer);
+				free(dup);
 				return 0;
 			}
 		}
@@ -198,8 +203,8 @@ int fs_opendir(const char *path, struct fuse_file_info *fi) {
     if(s3fs_get_object(bucket, path, (uint8_t**)&buffer, 0, 0) == -1)
     {
 	free(buffer);
-printf(stderr, "%s\n\n\n\n\n\n\n\n\n","option3");
-printf("%s",path);
+	printf(stderr, "%s\n\n\n\n\n\n","option3");
+	printf("%s",path);
 
 	return -ENOENT;
     }
@@ -209,26 +214,29 @@ printf("%s",path);
     if(success == -1)
     {
 	free(buffer);
-printf("%s\n\n\n\n\n\n\n\n\n\n\n","option4");
+	printf("%s\n\n\n\n\n\n","option4");
 
 	return -ENOENT;
     }
 	printf(stderr, "%s\n", "test2.5");
 	int x = 0;
 	int length = success/sizeof(s3dirent_t);
+	char * dup = strdup(path);
 	for(; x < length; x++)
 	{
 		printf("%s%d\n", "test3", x);
 		s3dirent_t dirent = buffer[x];
-		if(strcmp((dirent.name),path) == 0)
+		if(strcmp((dirent.name), basename(dup)) == 0)
 		{
 			if(dirent.type == 'D')
 			{
+				free(dup);
 				free(buffer);
 				return 0;
 			}
 			else if (dirent.type == 'F')
 			{
+				free(dup);
 				free(buffer);
 				return -ENOTDIR;
 			}
@@ -236,7 +244,7 @@ printf("%s\n\n\n\n\n\n\n\n\n\n\n","option4");
 	}
 	free(buffer);
 	printf(stderr, "%s\n\n\n\n\n\n\n\n\n\n","option6");
-
+	free(dup);
 	return -ENOENT;
 }
 
@@ -248,9 +256,9 @@ printf("%s\n\n\n\n\n\n\n\n\n\n\n","option4");
 int fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset,
          struct fuse_file_info *fi)
 {
-    fprintf(stderr, "fs_readdir(path=\"%s\", buf=%p, offset=%d)\n",
-          path, buf, (int)offset);
-    s3context_t *ctx = GET_PRIVATE_DATA;
+    	fprintf(stderr, "fs_readdir(path=\"%s\", buf=%p, offset=%d)\n",
+        path, buf, (int)offset);
+    	s3context_t *ctx = GET_PRIVATE_DATA;
 	int test = fs_opendir(path, fi);
 	if(test){
 		return test;
@@ -263,7 +271,8 @@ int fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset
 	for(; x < length; x++)
         {
 		if (buffer[x].type != 'U')
-    	        {    if(filler(buf, buffer[x].name, NULL, 0)!=0)
+    	        {
+			if(filler(buf, buffer[x].name, NULL, 0)!=0)
         	        {
 	               		return -ENOMEM;
                 	}
@@ -289,7 +298,7 @@ int adddirent(const char *path, mode_t mode, char * bucket)
 	s3dirent_t * newent = (s3dirent_t *) malloc(sizeof(s3dirent_t));
 	strcpy((newent->name),"."); 
 	newent->type = 'D';
-	newent->size = 0;
+	newent->size = sizeof(s3dirent_t);
 	newent->permissions = mode;
 	newent->hardlinks = 1;
 	newent->user = getuid();
@@ -315,10 +324,14 @@ int adddirtoparent(const char * path, char * bucket)
 {
 	char * pat = strdup(path);
 	char * par = dirname(pat);
+	char * dup = strdup(path);
 	s3dirent_t * buffer = NULL;
 	int success = s3fs_get_object(bucket, par, (uint8_t**)&buffer, 0, 0);
 	if(success ==-1)
 	{
+		free(buffer);
+        	free(pat);
+        	free(dup);
 		return -1;
 	}
 	int length = success/sizeof(s3dirent_t);
@@ -331,15 +344,20 @@ int adddirtoparent(const char * path, char * bucket)
 	}
 	s3dirent_t adding;
 	adding.type = 'D';
-	strcpy(adding.name, path);
+	strcpy(adding.name, basename(dup));
+	adding.size = sizeof(s3dirent_t);
 	newents[x] = adding;
 	int remove = s3fs_remove_object(bucket, par);
 	if(remove < 0){
+		free(buffer);
+        	free(pat);
+        	free(dup);
 		return -EIO;
 	}
 	int test = s3fs_put_object(bucket, par, (uint8_t *)newents, (length + 1)*sizeof(s3dirent_t));
 	free(buffer);
 	free(pat);
+	free(dup);
 	return test;
 }
 
@@ -430,30 +448,39 @@ int fs_rmdir(const char *path) {
         }
         x = 1;
         length = test/sizeof(s3dirent_t);
+	char * dup = strdup(path);
         for(; x < length; x++){
-                if(!strcmp(buffer[x].name, path)){
+                if(!strcmp(buffer[x].name, basename(dup))){
                         if(buffer[x].type != 'U')
 			{
 				buffer[x].type = 'U';
                		 	buffer[0].hardlinks--;
 				 if(s3fs_remove_object(bucket, par) == -1){
 	        		        free(buffer);
+					free(dup);
                 			return -EIO;
         			}
         			int test2 = s3fs_put_object(bucket, par, (uint8_t *)buffer, (length)*sizeof(s3dirent_t));
   	      			if(test2 < 0){
              		  	  fprintf(stderr, "upload failed.\n");
-            			    return -EIO;
+            			    	free(dup);
+					free(buffer);
+					return -EIO;
        				 }
      				   else if(test2 < sizeof(s3dirent_t)){
                			 fprintf(stderr, "did not allocate full dirent.\n");
-      			          return -EIO;
+      			          	free(dup);
+					free(buffer);
+					return -EIO;
         			}
+				free(dup);
 				free(buffer);
 				return 0;
 			}
 		}
         }
+	free(dup);
+	free(buffer);
 	return -EIO;
 }
 
@@ -683,6 +710,6 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "Starting up FUSE file system.\n");
     int fuse_stat = fuse_main(argc, argv, &s3fs_ops, stateinfo);
     fprintf(stderr, "Startup function (fuse_main) returned %d\n", fuse_stat);
-    
+
     return fuse_stat;
 }
