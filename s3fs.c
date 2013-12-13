@@ -361,6 +361,13 @@ int adddirtoparent(const char * path, char * bucket)
 		return -EIO;
 	}
 	int test = s3fs_put_object(bucket, par, (uint8_t *)newents, (length + 1)*sizeof(s3dirent_t));
+	if(test == -1){
+		free(newents);
+	        free(pat);
+		free(dup);
+		free(buffer);
+		return -EIO;
+	}
 	free(buffer);
 	free(newents);
 	free(pat);
@@ -512,20 +519,103 @@ int fs_rmdir(const char *path) {
  * nodes.  You *only* need to handle creation of regular
  * files here.  (See the man page for mknod (2).)
  */
+
+int filexist (char * path, char * bucket)
+{
+    s3dirent_t *buffer = NULL;
+    if(s3fs_get_object(bucket, path, (uint8_t**)&buffer, 0, 0) == -1)
+    {
+        free(buffer);
+        return -ENOENT;
+    }
+        free(buffer);
+    	return 0;
+}
+
+int addfiletoparent(char * bucket, char *path, mode_t mode, ssize_t size){
+	char * pat = strdup(path);
+	char * par = dirname(pat);
+	s3dirent_t * buffer = NULL;
+	int test = s3fs_get_object(bucket, par, (uint8_t**)&buffer, 0, 0);
+	if(test == -1){
+		return -EIO;
+	}
+	int x = 0;
+	int length =  test/sizeof(s3dirent_t);
+	s3dirent_t * newents = (s3dirent_t *) malloc(sizeof(s3dirent_t)*(length+1));
+	for(; x < length; x++){
+		newents[x] = buffer[x];
+	}
+	s3dirent_t newent;
+	char * dup = strdup(path);
+	strcpy((newent.name), basename(dup));
+        newent.type = 'F';
+        newent.size = size;
+        newent.permissions = mode;
+        newent.hardlinks = 1;
+        newent.user = getuid();
+        newent.group = getgid();
+        time_t now = time(NULL);
+        ctime(&now);
+        newent.modify = now;
+        newent.access = now;
+        newent.change = now;
+	newents[x] = newent;
+	free(dup);
+	free(buffer);
+	int remove = s3fs_remove_object(bucket, par);
+        if(remove < 0){
+                free(newents);
+                free(pat);
+                return -EIO;
+        }
+        test = s3fs_put_object(bucket, par, (uint8_t *)newents, (length + 1)*sizeof(s3dirent_t));
+        if(test == -1){
+                free(newents);
+	        free(pat);
+		return -EIO;
+        }
+	free(newents);
+	free(pat);
+	return 0;
+}
+
 int fs_mknod(const char *path, mode_t mode, dev_t dev) {
     fprintf(stderr, "fs_mknod(path=\"%s\", mode=0%3o)\n", path, mode);
     s3context_t *ctx = GET_PRIVATE_DATA;
-    return -EIO;
+    char * pat = strdup(path);
+    char * par = dirname(pat);
+    char * bucket = ctx->s3bucket;
+	if(!filexist(path, bucket)){
+		free(pat);
+		return -EEXIST;
+	}
+	if(filexist(par, bucket)){
+		free(pat);
+		return -ENOENT;
+	}
+	int test = s3fs_put_object(bucket, path, NULL, 0);
+	if(test == -1){
+		free(pat);
+		return -EIO;
+	}
+	test = addfiletoparent(bucket, path, mode, 0);
+	if(test == -1){
+		free(pat);
+		return -EIO;
+	}
+	free(pat);
+	return 0;
 }
 
 
-/* 
+/*
  * File open operation
  * No creation, or truncation flags (O_CREAT, O_EXCL, O_TRUNC)
  * will be passed to open().  Open should check if the operation
- * is permitted for the given flags.  
- * 
- * Optionally open may also return an arbitrary filehandle in the 
+ * is permitted for the given flags.
+ *
+ * Optionally open may also return an arbitrary filehandle in the
  * fuse_file_info structure (fi->fh).
  * which will be passed to all file operations.
  * (In stages 1 and 2, you are advised to keep this function very,
@@ -534,7 +624,44 @@ int fs_mknod(const char *path, mode_t mode, dev_t dev) {
 int fs_open(const char *path, struct fuse_file_info *fi) {
     fprintf(stderr, "fs_open(path\"%s\")\n", path);
     s3context_t *ctx = GET_PRIVATE_DATA;
-    return -EIO;
+	int test = filexist(path, ctx->s3bucket);
+	if(test){
+		return -ENOENT;
+	}
+	char * pat = strdup(path);
+	char * par = dirname(pat);
+	s3dirent_t *buffer = NULL;
+	test = s3fs_get_object(ctx->s3bucket, par, (uint8_t**)&buffer, 0, 0);
+        free(pat);
+	if(test == -1){
+                return -EIO;
+        }
+        int x = 0;
+        int length =  test/sizeof(s3dirent_t);
+	char * dup = strdup(path);
+        for(; x < length; x++){
+                s3dirent_t dirent = buffer[x];
+                if(strcmp((dirent.name), basename(dup)) == 0)
+                {
+                        if(dirent.type == 'D')
+                        {
+			        free(dup);
+                                free(buffer);
+                                return -ENOENT;
+                        }
+                        else if (dirent.type == 'F')
+                        {
+                                free(dup);
+                                free(buffer);
+                                return 0;
+                        }
+                }
+
+        }
+	free(dup);
+	free(buffer);
+	free(pat);
+        return -ENOENT;
 }
 
 
@@ -547,9 +674,25 @@ int fs_open(const char *path, struct fuse_file_info *fi) {
  */
 int fs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
     fprintf(stderr, "fs_read(path=\"%s\", buf=%p, size=%d, offset=%d)\n",
-          path, buf, (int)size, (int)offset);
-    s3context_t *ctx = GET_PRIVATE_DATA;
-    return -EIO;
+        path, buf, (int)size, (int)offset);
+ 	s3context_t *ctx = GET_PRIVATE_DATA;
+        if(fs_open(path, fi)){
+                return -ENOENT;
+        }
+        int test = s3fs_get_object(ctx->s3bucket, path, (uint8_t *)buf, offset, size);
+        if(test == -1){
+                return -EIO;
+        }
+	else if (test < size)
+	{
+		int x = test;
+		while (x < size)
+		{
+			buf[x] = 0;
+			x++;
+		}
+	}
+ 	return test;
 }
 
 
@@ -563,10 +706,86 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
     fprintf(stderr, "fs_write(path=\"%s\", buf=%p, size=%d, offset=%d)\n",
           path, buf, (int)size, (int)offset);
     s3context_t *ctx = GET_PRIVATE_DATA;
-    return -EIO;
-}
+        if(fs_open(path, fi)){
+                return -ENOENT;
+        }
+	char * buffer;
+        int test = s3fs_get_object(ctx->s3bucket, path, (uint8_t *)buffer, 0,0);
+        if(test == -1){
+                return -EIO;
+        }
+	int bufsize = test;
+        if (test < (size+offset))
+	{
+		bufsize = size+offset;
+	}
+	char newbuffer[bufsize];
+
+	int x = 0;
+	for(x; x < offset; x++);
+	{
+		newbuffer[x] = buffer[x];
+	}
+	x = 0;
+	for(; x < size; x++)
+	{
+		newbuffer[x+offset] = buf[x];
+	}
+	x = x + offset;
+	for(; x < test; x++)
+	{
+		newbuffer[x] = buffer[x];
+	}
+
+        char * pat = strdup(path);
+        char * par = dirname(pat);
+        s3dirent_t *buffer2 = NULL;
+        test = s3fs_get_object(ctx->s3bucket, par, (uint8_t**)&buffer2, 0, 0);
+        free(pat);
+        if(test == -1){
+                 return -EIO;
+        }
+	x = 0;
+        int length =  test/sizeof(s3dirent_t);
+        char * dup = strdup(path);
+        for(; x < length; x++){
+                s3dirent_t dirent = buffer2[x];
+                if(strcmp((dirent.name), basename(dup)) == 0)
+                {
+                        if (dirent.type == 'F')
+                        {
+                               fs_unlink(path);
+                                addfiletoparent(ctx->s3bucket, path, dirent.permissions, bufsize);
+                                 test = s3fs_put_object(ctx->s3bucket, path, (uint8_t*)newbuffer, bufsize);
+                                if(test < 0){
+                                        free(buffer);
+                                        free(buffer2);
+                                        free(dup);
+                                        return -EIO;
+                                }
+                                else if(test < dirent.size){
+                                        fprintf(stderr, "Failed to upload all data.");
+                                        free(buffer);
+                                        free(buffer2);
+                                        free(dup);
+                                        return -EIO;
+                                }
+                                free(buffer);
+                                free(buffer2);
+                                free(dup);
+                                return 0;
+                        }
+                }
+        }
 
 
+
+
+
+
+
+
+} 
 /*
  * Release an open file
  *
@@ -583,7 +802,7 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
 int fs_release(const char *path, struct fuse_file_info *fi) {
     fprintf(stderr, "fs_release(path=\"%s\")\n", path);
     s3context_t *ctx = GET_PRIVATE_DATA;
-    return -EIO;
+    return 0;
 }
 
 
@@ -593,7 +812,53 @@ int fs_release(const char *path, struct fuse_file_info *fi) {
 int fs_rename(const char *path, const char *newpath) {
     fprintf(stderr, "fs_rename(fpath=\"%s\", newpath=\"%s\")\n", path, newpath);
     s3context_t *ctx = GET_PRIVATE_DATA;
-    return -EIO;
+     char * buffer = NULL;
+// same as other turncate except assume the file is "open"
+        int test = s3fs_get_object(ctx->s3bucket, path, (uint8_t**)&buffer, 0, 0);
+        if(test == -1){
+                free(buffer);
+                return -EIO;
+        }
+        char * pat = strdup(path);
+        char * par = dirname(pat);
+        s3dirent_t *buffer2 = NULL;
+        test = s3fs_get_object(ctx->s3bucket, par, (uint8_t**)&buffer2, 0, 0);
+        free(pat);
+        if(test == -1){
+		 return -EIO;
+        }
+        int x = 0;
+        int length =  test/sizeof(s3dirent_t);
+        char * dup = strdup(path);
+        for(; x < length; x++){
+                s3dirent_t dirent = buffer2[x];
+                if(strcmp((dirent.name), basename(dup)) == 0)
+                {
+                        if (dirent.type == 'F')
+                        {
+				fs_unlink(path);
+				addfiletoparent(ctx->s3bucket, newpath, dirent.permissions, dirent.size);
+                                 test = s3fs_put_object(ctx->s3bucket, newpath, (uint8_t*)buffer, dirent.size);
+                                if(test < 0){
+                                        free(buffer);
+                                        free(buffer2);
+                                       	free(dup);
+					return -EIO;
+                                }
+                                else if(test < dirent.size){
+                                        fprintf(stderr, "Failed to upload all data.");
+                                        free(buffer);
+                                        free(buffer2);
+                                        free(dup);
+					return -EIO;
+                                }
+				free(buffer);
+				free(buffer2);
+				free(dup);
+				return 0;
+			}
+		}
+	}
 }
 
 
@@ -603,7 +868,42 @@ int fs_rename(const char *path, const char *newpath) {
 int fs_unlink(const char *path) {
     fprintf(stderr, "fs_unlink(path=\"%s\")\n", path);
     s3context_t *ctx = GET_PRIVATE_DATA;
-    return -EIO;
+    struct fuse_file_info *fi;
+	if(fs_open(path, fi)){
+		return -ENOENT;
+	}
+	char * pat = strdup(path);
+	char * par = dirname(pat);
+	s3dirent_t *buffer = NULL;
+	int test = s3fs_get_object(ctx->s3bucket, par, (uint8_t**)&buffer, 0, 0);
+        free(pat);
+        if(test == -1){
+                return -EIO;
+        }
+        int x = 0;
+        int length =  test/sizeof(s3dirent_t);
+        char * dup = strdup(path);
+	free(pat);
+        for(; x < length; x++){
+                s3dirent_t dirent = buffer[x];
+                if(strcmp((dirent.name), basename(dup)) == 0)
+                {
+                        if (dirent.type == 'F')
+                        {
+                                dirent.type = 'U';
+				free(dup);
+                                free(buffer);
+				if(s3fs_remove_object(ctx->s3bucket, path) == -1){
+                		        return -EIO;
+			        }
+
+                                return 0;
+                        }
+                }
+	}
+	free(dup);
+	free(buffer);
+	return -EIO; //thisisnotgoingtohappen
 }
 /*
  * Change the size of a file.
@@ -611,7 +911,66 @@ int fs_unlink(const char *path) {
 int fs_truncate(const char *path, off_t newsize) {
     fprintf(stderr, "fs_truncate(path=\"%s\", newsize=%d)\n", path, (int)newsize);
     s3context_t *ctx = GET_PRIVATE_DATA;
-    return -EIO;
+	struct fuse_file_info *fi;
+    int test = fs_open(path, fi);
+	if(test){
+		return test;
+	}
+	s3dirent_t * buffer = NULL;
+	test = s3fs_get_object(ctx->s3bucket, path, (uint8_t**)&buffer, 0, 0);
+	if(test == -1){
+		free(buffer);
+		return -EIO;
+	}
+	char * pat = strdup(path);
+        char * par = dirname(pat);
+	s3dirent_t *buffer2 = NULL;
+        test = s3fs_get_object(ctx->s3bucket, par, (uint8_t**)&buffer2, 0, 0);
+        free(pat);
+        if(test == -1){
+                return -EIO;
+        }
+        int x = 0;
+        int length =  test/sizeof(s3dirent_t);
+        char * dup = strdup(path);
+        free(pat);
+        for(; x < length; x++){
+                s3dirent_t dirent = buffer2[x];
+                if(strcmp((dirent.name), basename(dup)) == 0)
+                {
+                        if (dirent.type == 'F')
+                        {
+                                dirent.size = newsize;
+				time_t now = time(NULL);
+       				ctime(&now);
+       		 		dirent.modify = now;
+        			dirent.access = now;
+	       			dirent.change = now;
+                                free(dup);
+                                if(s3fs_remove_object(ctx->s3bucket, path) == -1){
+                                        free(buffer);
+					free(buffer2);
+					return -EIO;
+                                }
+				test = s3fs_put_object(ctx->s3bucket, path, (uint8_t*)buffer, newsize);
+				if(test < 0){
+					free(buffer);
+					free(buffer2);
+					return -EIO;
+				}
+				else if(test < newsize){
+					fprintf(stderr, "Failed to upload all data.");
+					free(buffer);
+					free(buffer2);
+					return -EIO;
+				}
+				free(buffer);
+				free(buffer2);
+                                return 0;
+                        }
+                }
+        }
+
 }
 
 
@@ -623,7 +982,62 @@ int fs_truncate(const char *path, off_t newsize) {
 int fs_ftruncate(const char *path, off_t offset, struct fuse_file_info *fi) {
     fprintf(stderr, "fs_ftruncate(path=\"%s\", offset=%d)\n", path, (int)offset);
     s3context_t *ctx = GET_PRIVATE_DATA;
-    return -EIO;
+    s3dirent_t * buffer = NULL;
+// same as other turncate except assume the file is "open"
+        int test = s3fs_get_object(ctx->s3bucket, path, (uint8_t**)&buffer, 0, 0);
+        if(test == -1){
+                free(buffer);
+                return -EIO;
+        }
+        char * pat = strdup(path);
+        char * par = dirname(pat);
+        s3dirent_t *buffer2 = NULL;
+        test = s3fs_get_object(ctx->s3bucket, par, (uint8_t**)&buffer2, 0, 0);
+        free(pat);
+        if(test == -1){
+                return -EIO;
+        }
+        int x = 0;
+        int length =  test/sizeof(s3dirent_t);
+        char * dup = strdup(path);
+        free(pat);
+        for(; x < length; x++){
+                s3dirent_t dirent = buffer2[x];
+                if(strcmp((dirent.name), basename(dup)) == 0)
+                {
+                        if (dirent.type == 'F')
+                        {
+                                dirent.size = offset;
+                                time_t now = time(NULL);
+                                ctime(&now);
+                                dirent.modify = now;
+                                dirent.access = now;
+                                dirent.change = now;
+                                free(dup);
+                                if(s3fs_remove_object(ctx->s3bucket, path) == -1){
+                                        free(buffer);
+					free(buffer2);
+                                        return -EIO;
+                                }
+                                test = s3fs_put_object(ctx->s3bucket, path, (uint8_t*)buffer, offset);
+                                if(test < 0){
+					free(buffer);
+					free(buffer2);
+                                        return -EIO;
+                                }
+                                else if(test < offset){
+                                        fprintf(stderr, "Failed to upload all data.");
+                                        free(buffer);
+					free(buffer2);
+                                        return -EIO;
+                                }
+                                free(buffer);
+				free(buffer2);
+                                return 0;
+                        }
+                }
+        }
+
 }
 
 
