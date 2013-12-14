@@ -559,14 +559,17 @@ int fs_unlink(const char *);
 //check if a  path exists
 int filexist (const char * path, char * bucket)
 {
-    s3dirent_t *buffer = NULL;
+    char *buffer = NULL;
+    fprintf(stderr, bucket);
     if(s3fs_get_object(bucket, path, (uint8_t**)&buffer, 0, 0) == -1)
     {
         free(buffer);
         return -ENOENT;
     }
+   else {
         free(buffer);
     	return 0;
+   }
 }
 
 //add a file entry to the parent dirent array
@@ -631,7 +634,8 @@ int fs_mknod(const char *path, mode_t mode, dev_t dev) {
 		free(pat);
 		return -EEXIST;
 	}
-	if(filexist(par, bucket)){ //parent doesn't exist
+	   struct fuse_file_info * fi;
+	if(fs_opendir(par, fi)){ //parent doesn't exist
 		free(pat);
 		return -ENOENT;
 	}
@@ -723,18 +727,26 @@ int fs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_
         if(fs_open(path, fi)){
                 return -ENOENT;
         }
-        int test = s3fs_get_object(ctx->s3bucket, path, (uint8_t **)&buf, offset, size);
+	char * buffer;
+        int test = s3fs_get_object(ctx->s3bucket, path, (uint8_t **)&buffer, offset, size);
         if(test == -1){
              return -EIO;
         }
-	else if (test < size)
+	int y = 0;
+	while (y < test)
 	{
+		buf[y] = (char)buffer[y];
+		y++;
+	}
+
+	//else if(test < size)
+	{/*
 		int x = test;
 		while (x < size)
 		{
-			buf[x] = 0;
+			buf[x] = '0';
 			x++;
-		}
+		}*/
 	}
  	return test;
 }
@@ -774,8 +786,7 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
 	{
 		bufsize = size+offset;
 	}
-	bufsize++;
-	char * newbuffer = (char *)malloc(bufsize*sizeof(char));
+	char newbuffer[bufsize];
 	int x = 0;
 	for(; x < offset; x++)
 	{
@@ -792,7 +803,6 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
 		newbuffer[x] = buffer[x];
 	}
 	newbuffer[bufsize] = '\0';
-        printf("\n\n%d\n\n", bufsize);
 	char * pat = strdup(path);
         char * par = dirname(pat);
         s3dirent_t *buffer2 = NULL;
@@ -822,21 +832,23 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
                                         free(buffer);
                                         free(buffer2);
                                     free(dup);
-					free(newbuffer);
                                         return -EIO;
                                 }
                                 else if(test < bufsize){
                                        fprintf(stderr, "Failed to upload all data.");
                                         free(buffer);
                                         free(buffer2);
-					free(newbuffer);
+				//	free(newbuffer);
                                         free(dup);
                                         return -EIO;
                                 }
+				free(buffer);
+				buffer = NULL;
+				test = s3fs_get_object(ctx->s3bucket, path, (uint8_t**)&buffer, 0,0);
+				fprintf(stderr, buffer);
                                 free(buffer);
                                 free(buffer2);
-fprintf(stderr,"HERE5");			
-	free(newbuffer);
+			//	free(newbuffer);
                                 free(dup);
                                 return 0;
                         }
@@ -844,7 +856,7 @@ fprintf(stderr,"HERE5");
         }
 	free(buffer);
 	free(buffer2);
-	free(newbuffer);
+//	free(newbuffer);
 	free(dup);
 	return -EIO;
 }
