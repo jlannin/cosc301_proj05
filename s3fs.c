@@ -1,3 +1,16 @@
+/*
+Justin Lannin
+Adam Becker
+
+12/13/13
+
+We should have part 1 all set and are still tweaking part 2 a little bit, but we just wanted to submit
+what we have so far.  We both worked on this pretty equally.
+
+
+*/
+
+
 /* This code is based on the fine code written by Joseph Pfeiffer for his
    fuse system tutorial. */
 
