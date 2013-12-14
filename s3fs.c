@@ -4,8 +4,13 @@ Adam Becker
 
 12/13/13
 
-We should have part 1 all set and are still tweaking part 2 a little bit, but we just wanted to submit
-what we have so far.  We both worked on this pretty equally.
+We apologize for the delay.  Most of our time today and last night was spent trying to figure
+out what was triggering the "input/output" error on fs_write.  The function seems to be working correctly
+as we can write to files, see their sizes change in their parents, and then read them, but we are still
+getting a bash error message which we do not know how to get rid of.  We have identifeid that it is triggered
+before release is called but we are unable to pinpoint its exact location.  Besides this false error, everything
+seems to be working correctly.  We are just going to put in some additional time
+updates for completeness and take a crack at permissions.  We both worked on this pretty equally.
 
 
 */
@@ -738,16 +743,6 @@ int fs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_
 		buf[y] = (char)buffer[y];
 		y++;
 	}
-
-	//else if(test < size)
-	{/*
-		int x = test;
-		while (x < size)
-		{
-			buf[x] = '0';
-			x++;
-		}*/
-	}
  	return test;
 }
 
@@ -790,7 +785,7 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
 	int x = 0;
 	for(; x < offset; x++)
 	{
-		newbuffer[x] = buffer[x];
+		newbuffer[x] = (char)buffer[x];
 	}
 	x = 0;
 	for(; x < size; x++)
@@ -800,7 +795,7 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
 	x = x + offset;
 	for(; x < test; x++)
 	{
-		newbuffer[x] = buffer[x];
+		newbuffer[x] = (char)buffer[x];
 	}
 	newbuffer[bufsize] = '\0';
 	char * pat = strdup(path);
