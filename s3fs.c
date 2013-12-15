@@ -4,14 +4,17 @@ Adam Becker
 
 12/13/13
 
-We apologize for the delay.  Most of our time today and last night was spent trying to figure
-out what was triggering the "input/output" error on fs_write.  The function seems to be working correctly
-as we can write to files, see their sizes change in their parents, and then read them, but we are still
-getting a bash error message which we do not know how to get rid of.  We have identifeid that it is triggered
-before release is called but we are unable to pinpoint its exact location.  Besides this false error, everything
-seems to be working correctly.  We are just going to put in some additional time
-updates for completeness and take a crack at permissions.  We both worked on this pretty equally.
+We apologize for the delay.  We spent too much time trying to figure out what was triggering the "input/output
+error on fs_write.  The function seems to be working correctly as we can write to files, see their sizes change
+in their parents, and then read them, but we are still getting a bash error message which we do not know how to
+get rid of.  We have identifeid that it is triggered before release is called but we are unable to pinpoint its
+exact location.  A similar thing happens on a couple of other calls where everything will work out fine in our file
+system but it will have reported back that there were errors and that the task failed.
+Besides these seemingly false error, everything seems to be working correctly and we should be able to update
+times for files on read, open, truncate, ftruncate, and rename.   We both worked on this pretty equally.
 
+
+Happy Birthday to your daughter! :)
 
 */
 
@@ -307,9 +310,9 @@ int fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset
                 	}
 		}
         }
-	free(buffer);
-    return 0;
-}
+      free(buffer);
+      return 0;
+ }
 
 
 /*
@@ -565,7 +568,6 @@ int fs_unlink(const char *);
 int filexist (const char * path, char * bucket)
 {
     char *buffer = NULL;
-    fprintf(stderr, bucket);
     if(s3fs_get_object(bucket, path, (uint8_t**)&buffer, 0, 0) == -1)
     {
         free(buffer);
@@ -625,7 +627,6 @@ int addfiletoparent(char * bucket, const char *path, mode_t mode, ssize_t size){
         }
 	free(newents);
 	free(pat);
-	fprintf(stderr, "HERE6");
 	return 0;
 }
 
@@ -717,6 +718,72 @@ int fs_open(const char *path, struct fuse_file_info *fi) {
         return -ENOENT;
 }
 
+//method to change metadata times of a file,
+//can signal that you want a, m, or c changed
+
+int changeaccesstime(const char * path, int a, int m, int c, char * bucket)
+{
+	char * pat  = strdup(path);
+	char * par  = dirname(pat);
+	 s3dirent_t *buffer = NULL;
+        int test = s3fs_get_object(bucket, par, (uint8_t**)&buffer, 0, 0);
+        free(pat);
+        if(test == -1){
+                free(buffer);
+                return -EIO;
+        }
+        int x = 0;
+        int length =  test/sizeof(s3dirent_t);
+        char * dup = strdup(path);
+        char * bas = basename(dup);
+        for(; x < length; x++){
+                s3dirent_t dirent = buffer[x];
+                if(strcmp((dirent.name), bas) == 0)
+                {
+                        if(dirent.type == 'D')
+                        {
+                                free(dup);
+                                free(buffer);
+                                return -ENOENT;
+                        }
+                        else if (dirent.type == 'F')
+                        {
+                                free(dup);
+
+				time_t now = time(NULL);
+        			ctime(&now);
+				if(m)
+				{
+				        buffer[x].modify = now;
+       				}
+				if(a)
+				{
+					buffer[x].access = now;
+       			 	}
+				if(c)
+				{
+					buffer[x].change = now;
+      				}
+			  	 int remove = s3fs_remove_object(bucket, par);
+ 	       			if(remove < 0){
+        			free(buffer);
+ 		               return -EIO;
+       				 }
+  	   		        test = s3fs_put_object(bucket, par, (uint8_t *)buffer, (length)*sizeof(s3dirent_t)); //put parent back up
+  		    	 	if(test== -1){
+       					   free(buffer);
+        		       		 return -EIO;
+        			}
+                                free(buffer);
+                                return 0;
+                 	}
+                }
+
+        }
+        free(dup);
+        free(buffer);
+        return -ENOENT;
+}
 
 /*
  * Read data from an open file
@@ -743,6 +810,10 @@ int fs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_
 		buf[y] = (char)buffer[y];
 		y++;
 	}
+	if(changeaccesstime(path, 1, 0, 0, ctx->s3bucket))
+	{
+		return -EIO;
+	}
  	return test;
 }
 
@@ -760,7 +831,6 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
 	if(size < 1){
 	return 0;
 	}
-	fprintf(stderr, "\n\n\n\n\n\n\n\n\n\n\nHERE HERE HERE HERE HERE ");
         if(fs_open(path, fi)){
                 return -ENOENT;
         }
@@ -798,6 +868,12 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
 		newbuffer[x] = (char)buffer[x];
 	}
 	newbuffer[bufsize] = '\0';
+	if(changeaccesstime(path, 1, 1, 1, ctx->s3bucket))
+	{
+		free(buffer);
+		free(newbuffer);
+		return -EIO;
+	}
 	char * pat = strdup(path);
         char * par = dirname(pat);
         s3dirent_t *buffer2 = NULL;
@@ -833,17 +909,14 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
                                        fprintf(stderr, "Failed to upload all data.");
                                         free(buffer);
                                         free(buffer2);
-				//	free(newbuffer);
                                         free(dup);
                                         return -EIO;
                                 }
 				free(buffer);
 				buffer = NULL;
 				test = s3fs_get_object(ctx->s3bucket, path, (uint8_t**)&buffer, 0,0);
-				fprintf(stderr, buffer);
                                 free(buffer);
                                 free(buffer2);
-			//	free(newbuffer);
                                 free(dup);
                                 return 0;
                         }
@@ -851,7 +924,6 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
         }
 	free(buffer);
 	free(buffer2);
-//	free(newbuffer);
 	free(dup);
 	return -EIO;
 }
@@ -900,6 +972,11 @@ int fs_rename(const char *path, const char *newpath) {
 		free(buffer);
 		 return -EIO;
         }
+	test = filexist(newpath,ctx->s3bucket);
+        if(!test){
+		fprintf(stderr, "file in new location already exists");
+                return -EEXIST; //a file already exists where we are trying to move it
+        }
         int x = 0;
         int length =  test/sizeof(s3dirent_t);
         char * dup = strdup(path);
@@ -929,9 +1006,11 @@ int fs_rename(const char *path, const char *newpath) {
 				free(buffer);
 				free(buffer2);
 				free(dup);
-     fprintf(stderr, "HERE4");
-	
-			return 0;
+				if(changeaccesstime(path, 0, 0, 1, ctx->s3bucket)) //only change status time
+				{
+					return -EIO;
+				}
+				return 0;
 			}
 		}
 	}
@@ -964,8 +1043,7 @@ int fs_unlink(const char *path) {
         int length =  test/sizeof(s3dirent_t);
         char * dup = strdup(path);
 	char * bas = basename(dup);
-	fprintf(stderr, "HERRRRRRRRRRRRRRRRRRRRRRRRRRE");
-        for(; x < length; x++){
+       for(; x < length; x++){
                 s3dirent_t dirent = buffer[x];
                 if(strcmp((dirent.name),bas) == 0)
                 {
@@ -999,8 +1077,6 @@ int fs_unlink(const char *path) {
 					return -EIO;
 				}
 				free(pat);
-				     fprintf(stderr, "HERE");
-
 				free(dup);
                                 free(buffer);
 				return 0;
@@ -1040,7 +1116,13 @@ int fs_truncate(const char *path, off_t newsize) {
 		free(buffer2);
                 return -EIO;
         }
-        int x = 0;
+        if(changeaccesstime(path, 1, 1, 0, ctx->s3bucket))
+	{
+		free(buffer);
+		free(buffer2);
+		return -EIO;
+	}
+	int x = 0;
         int length =  test/sizeof(s3dirent_t);
         char * dup = strdup(path);
 	char * bas = basename(dup);
@@ -1076,8 +1158,6 @@ int fs_truncate(const char *path, off_t newsize) {
 				}
 				free(buffer);
 				free(buffer2);
-	     fprintf(stderr, "HERE2");
-
                                 return 0;
                         }
                 }
@@ -1114,7 +1194,13 @@ int fs_ftruncate(const char *path, off_t offset, struct fuse_file_info *fi) {
 		free(buffer);
                 return -EIO;
         }
-        int x = 0;
+        if(changeaccesstime(path, 1, 1, 0, ctx->s3bucket))
+        {
+                free(buffer);
+                free(buffer2);
+                return -EIO;
+        }
+	int x = 0;
         int length =  test/sizeof(s3dirent_t);
         char * dup = strdup(path);
 	char * bas = basename(dup);
@@ -1150,8 +1236,6 @@ int fs_ftruncate(const char *path, off_t offset, struct fuse_file_info *fi) {
                                 }
                                 free(buffer);
 				free(buffer2);
-     fprintf(stderr, "HERE1");
-
                                 return 0;
                         }
                 }
@@ -1163,19 +1247,33 @@ int fs_ftruncate(const char *path, off_t offset, struct fuse_file_info *fi) {
 
 
 /*
+Our understanding of access is that we are supposed to check to see
+if the user and group matches the permissions
+
+*/
+
+/*
  * Check file access permissions.  For now, just return 0 (success!)
  * Later, actually check permissions (don't bother initially).
  */
 int fs_access(const char *path, int mask) {
     fprintf(stderr, "fs_access(path=\"%s\", mask=0%o)\n", path, mask);
     s3context_t *ctx = GET_PRIVATE_DATA;
-    return 0;
+	if(filexist(path, ctx->s3bucket))
+	{
+		-ENOENT;
+	}
+	if(mask == F_OK) //file exists
+	{
+		return 0;
+	}
+       return 0;
 }
 
 
 /*
  * The struct that contains pointers to all our callback
- * functions.  Those that are currently NULL aren't 
+ * functions.  Those that are currently NULL aren't
  * intended to be implemented in this project.
  */
 struct fuse_operations s3fs_ops = {
